@@ -1,0 +1,214 @@
+<meta name='viewport' content='width=device-width, initial-scale=1'/><!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>FPS View</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #000; font-family: sans-serif; touch-action: none; }
+  
+  #stage {
+    position: absolute; top: 50%; left: 50%;
+    width: 100vh; height: 100vw;
+    transform: translate(-50%, -50%) rotate(90deg);
+    transform-origin: center center; overflow: hidden; background: #000;
+  }
+
+  /* Видео-фон (скрыто после старта) */
+  #bgVideo {
+    position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+    object-fit: cover; z-index: 1; pointer-events: none;
+  }
+
+  /* 3D Канвас (для оружия) */
+  #canvas3d {
+    position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+    z-index: 5; display: none; /* Скрыт до нажатия "Играть" */
+  }
+
+  /* UI Кнопки */
+  #controls {
+    position: absolute; left: 20px; top: 50%;
+    transform: translateY(-50%); display: flex; flex-direction: column; gap: 12px; z-index: 10;
+  }
+  .btn {
+    background: rgba(128,128,128,0.55); color: #fff; border: none; border-radius: 14px;
+    padding: 14px 28px; font-size: 17px; font-weight: 600; cursor: pointer;
+    backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+    transition: transform 0.2s, background 0.2s; -webkit-tap-highlight-color: transparent;
+  }
+  .btn:active { transform: scale(0.95); background: rgba(110,110,110,0.9); }
+
+  /* Настройки (оставил как было) */
+  #settingsOverlay { position: absolute; inset: 0; background: rgba(0,0,0,0.45); opacity: 0; visibility: hidden; transition: 0.35s; z-index: 20; }
+  #settingsOverlay.open { opacity: 1; visibility: visible; }
+  #settingsPanel {
+    position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%) scale(0.92);
+    width: 70vw; max-width: 900px; min-height: 40vh; background: rgba(110,110,110,0.92);
+    backdrop-filter: blur(18px); border-radius: 24px; padding: 32px; color: #fff; z-index: 25;
+    opacity: 0; visibility: hidden; transition: 0.35s; display: flex; align-items: center; justify-content: center; text-align: center;
+  }
+  #settingsPanel.open { opacity: 1; visibility: visible; transform: translate(-50%, -50%) scale(1); }
+  #creditsText { font-size: 28px; font-weight: 700; }
+  #closeSettings { position: absolute; top: 16px; right: 16px; background: rgba(255,255,255,0.15); border: none; color: #fff; width: 42px; height: 42px; border-radius: 50%; font-size: 20px; cursor: pointer; }
+</style>
+</head>
+<body>
+
+<div id="stage">
+  <video id="bgVideo" src="https://videotourl.com/videos/1795446308436-cb005786-091b-4973-ab55-8048fa47298b.mp4" autoplay muted loop playsinline></video>
+  <canvas id="canvas3d"></canvas>
+  
+  <div id="controls">
+    <button id="playBtn" class="btn">▶ Играть</button>
+    <button id="settingsBtn" class="btn">⚙ Настройки</button>
+  </div>
+
+  <div id="settingsOverlay"></div>
+  <div id="settingsPanel">
+    <button id="closeSettings">✕</button>
+    <div id="creditsText">Игра создана Кузьменко Сергеем</div>
+  </div>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+  import * as THREE from 'three';
+  import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+
+  // --- Элементы ---
+  const video = document.getElementById('bgVideo');
+  const canvas = document.getElementById('canvas3d');
+  const playBtn = document.getElementById('playBtn');
+  const settingsBtn = document.getElementById('settingsBtn');
+  const overlay = document.getElementById('settingsOverlay');
+  const panel = document.getElementById('settingsPanel');
+  const closeBtn = document.getElementById('closeSettings');
+
+  // --- 3D Сцена ---
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+  const renderer = new THREE.WebGLRenderer({ canvas: canvas, alpha: true, antialias: true });
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+
+  // Освещение (чтобы оружие было видно)
+  const ambientLight = new THREE.AmbientLight(0xffffff, 1.5);
+  scene.add(ambientLight);
+  const dirLight = new THREE.DirectionalLight(0xffffff, 2);
+  dirLight.position.set(5, 10, 7);
+  scene.add(dirLight);
+
+  // --- Загрузка модели AWP ---
+  let weaponModel = null;
+  const loader = new GLTFLoader();
+  
+  // ВАЖНО: Имя файла должно совпадать с тем, что лежит в папке!
+  loader.load('awp_counter_strike_2.glb', (gltf) => {
+    weaponModel = gltf.scene;
+    
+    // Настройка позиции оружия "в руках" (справа снизу)
+    // Вам возможно придется подогнать эти цифры под вашу модель
+    weaponModel.position.set(0.3, -0.3, -0.6); 
+    weaponModel.rotation.set(0, Math.PI, 0); // Поворот, если модель смотрит назад
+    weaponModel.scale.set(0.5, 0.5, 0.5); // Масштаб
+
+    // Прикрепляем оружие к камере, чтобы оно двигалось вместе с ней
+    camera.add(weaponModel);
+    scene.add(camera); // Камеру обязательно добавляем в сцену
+  }, undefined, (error) => {
+    console.error('Ошибка загрузки модели:', error);
+    alert('Не удалось загрузить модель. Проверьте, что файл awp_counter_strike_2.glb лежит рядом с HTML.');
+  });
+
+  // --- Управление камерой (Свайп для телефона) ---
+  let isDragging = false;
+  let previousMousePosition = { x: 0, y: 0 };
+  let targetRotation = { x: 0, y: 0 };
+  let currentRotation = { x: 0, y: 0 };
+
+  // Обработка касаний/мыши
+  const onStart = (e) => {
+    isDragging = true;
+    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+    const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+    previousMousePosition = { x: clientX, y: clientY };
+  };
+
+  const onMove = (e) => {
+    if (!isDragging) return;
+    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+    const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+    
+    const deltaX = clientX - previousMousePosition.x;
+    const deltaY = clientY - previousMousePosition.y;
+
+    // Чувствительность (подберите под себя)
+    targetRotation.y -= deltaX * 0.005;
+    targetRotation.x -= deltaY * 0.005;
+    
+    // Ограничиваем поворот по вертикали
+    targetRotation.x = Math.max(-Math.PI/4, Math.min(Math.PI/4, targetRotation.x));
+
+    previousMousePosition = { x: clientX, y: clientY };
+  };
+
+  const onEnd = () => { isDragging = false; };
+
+  canvas.addEventListener('mousedown', onStart);
+  canvas.addEventListener('mousemove', onMove);
+  window.addEventListener('mouseup', onEnd);
+  
+  canvas.addEventListener('touchstart', onStart, { passive: false });
+  canvas.addEventListener('touchmove', onMove, { passive: false });
+  window.addEventListener('touchend', onEnd);
+
+  // --- Анимация ---
+  function animate() {
+    requestAnimationFrame(animate);
+
+    // Плавное сглаживание поворота камеры
+    currentRotation.x += (targetRotation.x - currentRotation.x) * 0.1;
+    currentRotation.y += (targetRotation.y - currentRotation.y) * 0.1;
+
+    // Применяем поворот к камере (yaw и pitch)
+    camera.rotation.y = currentRotation.y;
+    camera.rotation.x = currentRotation.x;
+
+    renderer.render(scene, camera);
+  }
+  animate();
+
+  // --- Логика переключения ---
+  playBtn.addEventListener('click', () => {
+    // 1. Скрываем видео, показываем 3D
+    video.style.display = 'none';
+    canvas.style.display = 'block';
+    
+    // 2. Скрываем кнопки управления (опционально)
+    document.getElementById('controls').style.display = 'none';
+    
+    // 3. Небольшая задержка, чтобы Three.js обновил размеры
+    setTimeout(() => {
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+    }, 100);
+  });
+
+  // --- Настройки (как было) ---
+  settingsBtn.addEventListener('click', () => { overlay.classList.add('open'); panel.classList.add('open'); });
+  closeBtn.addEventListener('click', () => { overlay.classList.remove('open'); panel.classList.remove('open'); });
+  overlay.addEventListener('click', () => { overlay.classList.remove('open'); panel.classList.remove('open'); });
+</script>
+</body>
+</html>
